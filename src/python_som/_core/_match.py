@@ -144,21 +144,24 @@ def accumulate(
     distance: DistanceFunction,
     kernel: BmuKernel | None = None,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Sum the samples mapped to each node, and count them.
+    """Sum observed sample features mapped to each node, and count them.
 
-    These are the ``n_j`` and ``n_j * xbar_j`` of Kohonen (2013), Eq. (8): the count of samples
-    whose best match is node ``j``, and their sum.
+    These are the per-feature versions of ``n_j`` and ``n_j * xbar_j`` of Kohonen (2013), Eq. (8).
+    Missing features contribute to neither the sum nor the count.
 
     :param data: Dataset of shape ``(n_samples, n_features)``.
     :param weights: Models, of shape ``(x, y, n_features)``.
     :param shape: Shape of the grid.
     :param distance: Dissimilarity measure.
     :param kernel: Optional accelerated search; see :func:`bmu_indices`.
-    :return: Per-node sums of shape ``(x, y, n_features)`` and counts of shape ``(x, y)``.
+    :return: Per-node sums and feature counts, both of shape ``(x, y, n_features)``.
     """
     nodes = bmu_indices(data, weights, distance, kernel)
     n_nodes = shape[0] * shape[1]
-    sums = np.zeros((n_nodes, weights.shape[-1]))
-    np.add.at(sums, nodes, np.nan_to_num(data))
-    counts = np.bincount(nodes, minlength=n_nodes).astype(float)
-    return sums.reshape(*shape, weights.shape[-1]), counts.reshape(shape)
+    n_features = weights.shape[-1]
+    valid = np.isfinite(data)
+    sums = np.zeros((n_nodes, n_features))
+    counts = np.zeros((n_nodes, n_features))
+    np.add.at(sums, nodes, np.where(valid, data, 0.0))
+    np.add.at(counts, nodes, valid)
+    return sums.reshape(*shape, n_features), counts.reshape(*shape, n_features)
