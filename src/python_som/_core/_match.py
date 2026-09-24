@@ -107,11 +107,13 @@ def bmu_indices(
     if distance is not euclidean_distance:
         return np.array([np.asarray(distance(x, flat)).argmin() for x in data], dtype=np.intp)
 
+    if not np.isfinite(flat).all():
+        raise ValueError("weights must contain only finite values")
     shift = flat.mean(axis=0)
     centred = flat - shift
     squared = np.einsum("nf,nf->n", centred, centred)
 
-    if kernel is not None:  # pragma: no cover  reached only when numba is installed
+    if kernel is not None and not np.isnan(data).any():  # pragma: no cover
         return kernel(data - shift, centred, squared)
 
     n_nodes = len(flat)
@@ -120,11 +122,17 @@ def bmu_indices(
     out = np.empty(len(data), dtype=np.intp)
     for start in range(0, len(data), chunk):
         block = data[start : start + chunk]
-        # Into a preallocated buffer: allocating one per chunk was 1.5x slower and 8x heavier.
-        np.matmul(block - shift, centred.T, out=scores[: len(block)])
+        if np.isinf(block).any():
+            raise ValueError("data must contain only finite values or NaN")
+        mask = ~np.isnan(block)
+        if not mask.any(axis=1).all():
+            raise ValueError("each sample must contain at least one finite value")
+        centred_block = np.where(mask, block - shift, 0.0)
         block_scores = scores[: len(block)]
+        np.matmul(centred_block, centred.T, out=block_scores)
         block_scores *= -2.0
-        block_scores += squared
+        block_scores += np.matmul(mask, (centred**2).T)
+        block_scores += np.einsum("nf,nf->n", centred_block, centred_block)[:, None]
         out[start : start + len(block)] = block_scores.argmin(axis=1)
     return out
 
@@ -151,6 +159,6 @@ def accumulate(
     nodes = bmu_indices(data, weights, distance, kernel)
     n_nodes = shape[0] * shape[1]
     sums = np.zeros((n_nodes, weights.shape[-1]))
-    np.add.at(sums, nodes, data)
+    np.add.at(sums, nodes, np.nan_to_num(data))
     counts = np.bincount(nodes, minlength=n_nodes).astype(float)
     return sums.reshape(*shape, weights.shape[-1]), counts.reshape(shape)
